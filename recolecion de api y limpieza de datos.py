@@ -167,3 +167,5 @@ if __name__ == "__main__":
 
 
     print("lamento que haya visto nuestro historial")
+
+    adadadadadadada NameError
