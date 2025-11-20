@@ -164,8 +164,3 @@ if __name__ == "__main__":
     print("\n--- Ejecución finalizada. ---")
 
     print("HOLA POLISONTA PUTA")
-
-
-    print("lamento que haya visto nuestro historial")
-
-    adadadadadadada NameError
