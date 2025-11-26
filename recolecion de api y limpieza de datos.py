@@ -42,9 +42,6 @@ URL_BASE = (
 # =======================================================================
 
 def obtener_datos_inegi(url):
-    """
-    Realiza la solicitud HTTP a la API del INEGI.
-    """
     try:
         response = requests.get(url)
 
@@ -71,10 +68,7 @@ def obtener_datos_inegi(url):
 
 
 def procesar_y_guardar_series(datos_json, carpeta_salida, nombres_map):
-    """
-    Itera sobre CADA serie en el JSON, la limpia y la guarda en un CSV individual
-    usando los nombres amigables del diccionario 'nombres_map'.
-    """
+
     if 'Series' not in datos_json:
         print("[DEBUG] No se encontró la clave 'Series' en el JSON.")
         return
