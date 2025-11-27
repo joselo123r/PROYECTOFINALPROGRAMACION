@@ -1,161 +1,139 @@
-import requests
-import pandas as pd
-import json
 import os
+import sys
+import argparse
+from pathlib import Path
 
-# =======================================================================
-# CONFIGURACIÓN CRÍTICA
-# =======================================================================
-
-API_TOKEN = "58cab149-c8ec-2bdc-929c-d198018a7215"
-
-# LISTA DE INDICADORES (¡Solución Final!)
-INDICATOR_ID_LISTA = "8999998853,6206972692,6206972693,6206972689"
-
-GEOGRAFIA = "00"
-PARAMETRO_TIEMPO = "false"  # Pedir serie histórica
-
-# =======================================================================
-# ¡NUEVO! DICCIONARIO DE NOMBRES DE INDICADORES
-# =======================================================================
-# Traduce los IDs de la API a nombres legibles para los archivos y columnas.
-NOMBRES_INDICADORES = {
-    "8999998853": "PIB_Nacional_Incompleto",
-    "6206972692": "Hogares_con_Internet",
-    "6206972693": "Usuarios_de_Internet",
-    "6206972689": "Hogares_con_Televisor"
-}
-# =======================================================================
-
-# Verificación de seguridad
-assert API_TOKEN not in ["[Aquí va tu Token]", ""], "¡ERROR CRÍTICO! Reemplace la variable API_TOKEN."
-
-# URL FINAL Multi-Indicador (Formato BISE 2.0)
-URL_BASE = (
-    f"https://www.inegi.org.mx/app/api/indicadores/desarrolladores/jsonxml/INDICATOR/{INDICATOR_ID_LISTA}/es/"
-    f"{GEOGRAFIA}/{PARAMETRO_TIEMPO}/BISE/2.0/{API_TOKEN}?type=json"
-)
+import pandas as pd
+import matplotlib.pyplot as plt
 
 
-# =======================================================================
-# FUNCIONES DE EXTRACCIÓN Y PROCESAMIENTO
-# =======================================================================
+# Lista todos los CSV de una carpeta
+def listar_csvs(carpeta: str):
+    # Revisa que la carpeta exista
+    p = Path(carpeta)
+    if not p.exists() or not p.is_dir():
+        print(f"[ERROR] Carpeta no encontrada: {carpeta}")
+        return []
+    # Regresa solo archivos .csv ordenados
+    return sorted([f for f in p.iterdir() if f.suffix.lower() == ".csv"])
 
-def obtener_datos_inegi(url):
-    """
-    Realiza la solicitud HTTP a la API del INEGI.
-    """
-    try:
-        response = requests.get(url)
 
-        if response.status_code != 200:
-            try:
-                error_json = response.json()
-                print(f"\n[DEBUG] Error HTTP: {response.status_code}")
-                print(json.dumps(error_json, indent=4))
-            except json.JSONDecodeError:
-                print(f"\n[DEBUG] Error HTTP: {response.status_code}. La respuesta no es JSON.")
-            return None
+# Carga CSVs básicos a un dict {nombre: DataFrame}
+def cargar_csvs_basico(carpeta: str):
+    # No limpia nada raro, solo toma primera columna como Fecha y segunda como Valor
+    resultados = {}
+    for path in listar_csvs(carpeta):
+        try:
+            df = pd.read_csv(path)
+            if df.shape[1] < 2:
+                print(f"[WARN] {path.name} tiene menos de 2 columnas, se omite.")
+                continue
 
-        datos_json = response.json()
+            cols = df.columns.tolist()
+            df2 = df[[cols[0], cols[1]]].copy()
+            df2.columns = ["Fecha", "Valor"]
 
-        if 'Header' not in datos_json or 'Series' not in datos_json:
-            print("\n[DEBUG] Alerta Estructural: El JSON no contiene 'Header' o 'Series'.")
-            return None
+            # Intenta convertir Fecha a datetime pero sin forzar
+            df2["Fecha"] = pd.to_datetime(df2["Fecha"], errors="ignore")
+            resultados[path.stem] = df2
 
-        return datos_json
+        except Exception as e:
+            print(f"[WARN] No se pudo leer {path.name}: {e}")
+    return resultados
 
-    except requests.exceptions.RequestException:
-        print("\n[DEBUG] Error de Conexión. Verifique su conexión.")
+
+# Grafica uno o varios DataFrames del dict
+def graficar_basico(dfs_dict, nombres=None, guardar=False, carpeta_plots="plots"):
+    # Si no hay datos, no hace nada
+    if not dfs_dict:
+        print("[INFO] No hay datos para graficar.")
+        return None
+
+    # Si no mandas nombres, grafica todos
+    to_plot = nombres if nombres else list(dfs_dict.keys())
+    to_plot = [n for n in to_plot if n in dfs_dict]
+
+    if not to_plot:
+        print("[WARN] No se encontraron nombres solicitados en los datos.")
+        return None
+
+    plt.figure(figsize=(10, 6))
+
+    for nombre in to_plot:
+        df = dfs_dict[nombre]
+        x = df["Fecha"]
+        y = pd.to_numeric(df["Valor"], errors="coerce")
+        plt.plot(x, y, marker="o", label=nombre)
+
+    plt.legend()
+    plt.grid(True)
+    plt.xlabel("Fecha")
+    plt.ylabel("Valor")
+    plt.title("Series de tiempo (modo local)")
+    plt.tight_layout()
+
+    if guardar:
+        # Crea carpeta de plots si no existe
+        os.makedirs(carpeta_plots, exist_ok=True)
+        safe_name = "_".join(to_plot).replace(" ", "_")
+        ruta = os.path.join(carpeta_plots, f"series_{safe_name}.png")
+        plt.savefig(ruta, dpi=150)
+        plt.close()
+        print(f"[INFO] Gráfica guardada en: {ruta}")
+        return ruta
+    else:
+        # Muestra la gráfica en pantalla
+        plt.show()
         return None
 
 
-def procesar_y_guardar_series(datos_json, carpeta_salida, nombres_map):
-    """
-    Itera sobre CADA serie en el JSON, la limpia y la guarda en un CSV individual
-    usando los nombres amigables del diccionario 'nombres_map'.
-    """
-    if 'Series' not in datos_json:
-        print("[DEBUG] No se encontró la clave 'Series' en el JSON.")
-        return
-
-    print(f"\nSe encontraron {len(datos_json['Series'])} indicadores en la respuesta.")
-
-    for serie in datos_json['Series']:
-
-        current_id = serie.get('INDICADOR')
-        if not current_id:
-            print("[WARN] Se encontró una serie sin INDICADOR ID.")
-            continue
-
-        observaciones = serie.get('OBSERVATIONS')
-        if not observaciones:
-            print(f"[INFO] Indicador {current_id} no tiene 'OBSERVATIONS'.")
-            continue
-
-
-        nombre_amigable = nombres_map.get(
-            current_id,
-            serie.get('INDICADOR_DESCRIPCION', f'Valor_{current_id}')
-        )
-
-        df = pd.DataFrame(observaciones)
-
-        # Renombrar columnas usando el nombre amigable
-        df = df.rename(columns={
-            'TIME_PERIOD': 'Fecha',
-            'OBS_VALUE': nombre_amigable
-        })
-
-        if nombre_amigable not in df.columns or 'Fecha' not in df.columns:
-            print(f"[DEBUG] Error de columnas para Indicador {current_id}.")
-            continue
-
-        # Seleccionar, limpiar y guardar
-        df = df[['Fecha', nombre_amigable]]
-        df[nombre_amigable] = pd.to_numeric(df[nombre_amigable], errors='coerce')
-
-        # LIMPIEZA: Eliminar filas con valores NaN (como los del PIB 2015-2022)
-        df = df.dropna()
-
-        if df.empty:
-            print(f"\n[INFO] Indicador {current_id} ({nombre_amigable}) no tiene datos válidos después de la limpieza.")
-            continue
-
-        # --- GUARDADO CON NOMBRE AMIGABLE ---
-        # Guardar el archivo CSV usando el nombre amigable
-        archivo_salida = os.path.join(carpeta_salida, f'{nombre_amigable}.csv')
-        df.to_csv(archivo_salida, index=False)
-
-        print(f"\n=========================================")
-        print(f" DATOS GUARDADOS: {nombre_amigable} ")
-        print(f"=========================================")
-        print(f"Total de filas limpias: {len(df)}")
-        print(df.head())
-        print(f"Archivo: {archivo_salida}")
-
-
-# =======================================================================
-# PUNTO DE ENTRADA DEL SCRIPT
-# =======================================================================
-
+# Punto de entrada principal
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Modo local: cargar CSVs ya generados y graficar (sin API)."
+    )
+    parser.add_argument(
+        "--carpeta",
+        "-c",
+        default="api_inegi",
+        help="Carpeta donde buscar CSVs (por defecto: api_inegi)."
+    )
+    parser.add_argument(
+        "--indicadores",
+        "-i",
+        nargs="*",
+        default=None,
+        help="Nombres de archivos (sin .csv) a graficar. Si no se especifica, se grafican todos."
+    )
+    parser.add_argument(
+        "--guardar",
+        "-g",
+        action="store_true",
+        help="Si se usa, guarda la gráfica en PNG en vez de solo mostrarla."
+    )
+    parser.add_argument(
+        "--plots",
+        "-p",
+        default="plots",
+        help="Carpeta donde guardar las imágenes si usas --guardar."
+    )
 
-    print(f"\n[DIAGNÓSTICO] Solicitando {len(INDICATOR_ID_LISTA.split(','))} indicadores...")
-    print(URL_BASE)
-    print("--------------------------------------------------------------------------")
+    args = parser.parse_args()
 
-    CARPETA_SALIDA = 'api_inegi'
-    if not os.path.exists(CARPETA_SALIDA):
-        os.makedirs(CARPETA_SALIDA)
+    print(f"[INFO] Modo local activado. Buscando CSVs en: {args.carpeta}")
+    dfs = cargar_csvs_basico(args.carpeta)
 
-    datos_json = obtener_datos_inegi(URL_BASE)
+    if not dfs:
+        print("[INFO] No se encontraron CSVs válidos. Saliendo.")
+        sys.exit(0)
 
-    if datos_json:
-        # Pasamos el diccionario de nombres a la función de procesamiento
-        procesar_y_guardar_series(datos_json, CARPETA_SALIDA, NOMBRES_INDICADORES)
-        print("\n\n[ÉXITO] Proceso completado. Se han guardado los archivos CSV en la carpeta 'api_inegi'.")
-    else:
-        print("\n[FALLO] No se recibieron datos de la API.")
+    print(f"[INFO] Series cargadas: {list(dfs.keys())}")
+    graficar_basico(
+        dfs,
+        nombres=args.indicadores,
+        guardar=args.guardar,
+        carpeta_plots=args.plots
+    )
 
-    print("\n--- Ejecución finalizada. ---")
+    # Termina el script
+    sys.exit(0)
