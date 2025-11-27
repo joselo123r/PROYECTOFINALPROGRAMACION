@@ -93,10 +93,7 @@ def procesar_y_guardar_series(datos_json, carpeta_salida, nombres_map):
             print(f"[INFO] Indicador {current_id} no tiene 'OBSERVATIONS'.")
             continue
 
-        # --- LÓGICA DE RENOMBRADO ---
-        # 1. Usar el nombre del diccionario.
-        # 2. Si no está en el diccionario, usar la descripción de la API.
-        # 3. Si no hay descripción, usar el ID como último recurso.
+
         nombre_amigable = nombres_map.get(
             current_id,
             serie.get('INDICADOR_DESCRIPCION', f'Valor_{current_id}')
