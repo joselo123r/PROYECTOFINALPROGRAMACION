@@ -1,7 +1,8 @@
 import requests
 import pandas as pd
 import os
-from sqlalchemy import create_engine, text
+import urllib
+from sqlalchemy import create_engine
 
 # =======================================================================
 # 1. CONFIGURACIÓN DEL PROYECTO
@@ -28,30 +29,6 @@ NOMBRES_INDICADORES = {
     "6207131411": "Usuarios_Celular"
 }
 
-# =======================================================================
-# 2. CONFIGURACIÓN DE BASE DE DATOS (CUMPLE RÚBRICA: MySQL)
-# =======================================================================
-# IMPORTANTE PARA EL EQUIPO:
-# Se requiere instalar el driver: pip install pymysql
-# Deben crear una base de datos vacía llamada 'inegi_db' en su MySQL local.
-
-# Formato: mysql+pymysql://usuario:contraseña@host:puerto/nombre_base_datos
-# NOTA: Cambia 'root' y 'password' por tus credenciales reales de MySQL
-DB_USER = 'root'
-DB_PASS = '1234'  # <--- COLOCA TU CONTRASEÑA AQUÍ
-DB_HOST = 'localhost'
-DB_PORT = '3306'
-DB_NAME = 'inegi_db'
-
-CONNECTION_STRING = f"mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-
-# Creamos el motor de conexión
-try:
-    db_engine = create_engine(CONNECTION_STRING)
-    print(f"[SQL] Motor configurado para conectar a: {DB_NAME}")
-except Exception as e:
-    print(f"[SQL Error] No se pudo configurar el motor: {e}")
-
 # URL final de la API
 URL_BASE = (
     f"https://www.inegi.org.mx/app/api/indicadores/desarrolladores/jsonxml/INDICATOR/{INDICATOR_ID_LISTA}/es/"
@@ -59,16 +36,47 @@ URL_BASE = (
 )
 
 # =======================================================================
-# 3. FUNCIONES DE EXTRACCIÓN Y TRANSFORMACIÓN
+# 2. CONFIGURACIÓN DE BASE DE DATOS (SQL SERVER)
+# =======================================================================
+
+# Nombre exacto de tu servidor (La 'r' al inicio es vital para evitar errores con '\')
+SERVER_NAME = r'GABRIEL_PC\SQLEXPRESS'
+DATABASE_NAME = 'inegi_db'
+
+# Configuración de la cadena de conexión para Autenticación de Windows
+params = urllib.parse.quote_plus(
+    f"DRIVER={{ODBC Driver 17 for SQL Server}};"
+    f"SERVER={SERVER_NAME};"
+    f"DATABASE={DATABASE_NAME};"
+    f"Trusted_Connection=yes;"
+)
+
+CONNECTION_STRING = f"mssql+pyodbc:///?odbc_connect={params}"
+
+# Intentamos crear el motor de conexión
+db_engine = None
+try:
+    db_engine = create_engine(CONNECTION_STRING)
+    # Prueba rápida de conexión
+    with db_engine.connect() as conn:
+        print(f"[SQL] Conexión exitosa a: {SERVER_NAME} -> {DATABASE_NAME}")
+except Exception as e:
+    print(f"\n[ERROR CRÍTICO] No se pudo conectar a SQL Server.")
+    print(f"Detalle del error: {e}")
+    print("Asegúrate de tener instalado el 'ODBC Driver 17 for SQL Server'.")
+
+
+# =======================================================================
+# 3. FUNCIONES (ETL)
 # =======================================================================
 
 def obtener_datos_inegi(url):
     """
     Realiza la petición GET a la API del INEGI.
-    
+
     Args:
         url (str): URL formateada con token e indicadores.
-        
+
     Returns:
         dict: Objeto JSON con la respuesta si es exitosa, None si falla.
     """
@@ -87,13 +95,13 @@ def obtener_datos_inegi(url):
 
 def procesar_y_guardar_series(datos_json, carpeta_salida, nombres_map, engine):
     """
-    Procesa el JSON, limpia los datos, genera CSVs y carga a SQL.
-    
+    Procesa el JSON, limpia los datos, genera CSVs y carga a SQL Server.
+
     Args:
         datos_json (dict): JSON crudo del INEGI.
         carpeta_salida (str): Ruta donde se guardarán los CSV.
         nombres_map (dict): Diccionario para renombrar IDs a texto legible.
-        engine (sqlalchemy.engine): Motor de conexión a MySQL.
+        engine (sqlalchemy.engine): Motor de conexión a SQL Server.
     """
     if 'Series' not in datos_json:
         print("[Error] El JSON no contiene la clave 'Series'.")
@@ -108,65 +116,61 @@ def procesar_y_guardar_series(datos_json, carpeta_salida, nombres_map, engine):
         if not current_id or not observaciones:
             continue
 
-        # Obtener nombre legible del diccionario, o usar descripción por defecto
         nombre_amigable = nombres_map.get(
             current_id,
             serie.get('INDICADOR_DESCRIPCION', f'Valor_{current_id}')
         )
 
-        # Crear DataFrame
         df = pd.DataFrame(observaciones)
 
         # --- LIMPIEZA DE DATOS ---
-        # 1. Renombrar columnas clave
         df = df.rename(columns={'TIME_PERIOD': 'Fecha', 'OBS_VALUE': nombre_amigable})
 
         if nombre_amigable in df.columns and 'Fecha' in df.columns:
-            # 2. Filtrar solo columnas útiles
             df = df[['Fecha', nombre_amigable]]
 
-            # 3. Transformación numérica (Manejo de errores y redondeo)
+            # Convertir a numérico y limpiar errores
             df[nombre_amigable] = pd.to_numeric(df[nombre_amigable], errors='coerce')
-            df[nombre_amigable] = df[nombre_amigable].round(0) # Eliminar decimales innecesarios
-
-            # 4. Eliminar filas vacías resultantes de la conversión
+            df[nombre_amigable] = df[nombre_amigable].round(0)
             df = df.dropna(subset=[nombre_amigable])
 
             if df.empty:
                 print(f"[Info] {nombre_amigable} vacío tras limpieza.")
                 continue
 
-            # --- GUARDADO EN CSV (Respaldo local) ---
+            # --- GUARDAR CSV ---
             path_csv = os.path.join(carpeta_salida, f'{nombre_amigable}.csv')
             df.to_csv(path_csv, index=False)
 
-            # --- CARGA A BASE DE DATOS (MySQL) ---
+            # --- GUARDAR EN SQL SERVER ---
             try:
-                # if_exists='replace' borra la tabla si existe y la crea de nuevo
                 df.to_sql(name=nombre_amigable, con=engine, if_exists='replace', index=False)
-                msg_sql = "Cargado en MySQL correctamente"
+                msg_sql = "Cargado en SQL Server OK"
             except Exception as e:
-                msg_sql = f"Error al cargar en SQL: {e}"
+                msg_sql = f"Error SQL: {e}"
 
-            print(f"-> {nombre_amigable}: {len(df)} registros. | {msg_sql}")
+            print(f"-> {nombre_amigable}: {len(df)} regs. | {msg_sql}")
+
 
 # =======================================================================
-# 4. EJECUCIÓN PRINCIPAL
+# 4. MAIN
 # =======================================================================
 
 if __name__ == "__main__":
-    # Carpeta para archivos locales
+    # Verificación de seguridad antes de empezar
+    if db_engine is None:
+        print("\n[ALERTA] Deteniendo el programa porque no hay conexión a la Base de Datos.")
+        print("Revisa la configuración de SERVER_NAME o instala el driver ODBC.")
+        exit()
+
     CARPETA_SALIDA = 'api_inegi'
     if not os.path.exists(CARPETA_SALIDA):
         os.makedirs(CARPETA_SALIDA)
 
-    # 1. Extracción
     datos = obtener_datos_inegi(URL_BASE)
 
-    # 2. Procesamiento y Carga
     if datos:
         procesar_y_guardar_series(datos, CARPETA_SALIDA, NOMBRES_INDICADORES, db_engine)
-        print("\n[ÉXITO] Proceso de ETL (Extracción, Transformación y Carga) finalizado.")
-        print("Las tablas ya están disponibles en MySQL para su visualización.")
+        print("\n[LISTO] Proceso finalizado correctamente.")
     else:
         print("\n[FALLO] No se pudo completar el proceso.")
