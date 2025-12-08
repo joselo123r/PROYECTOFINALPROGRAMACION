@@ -43,17 +43,35 @@ def cargar_csv(nombre):
     ruta = os.path.join(CARPETA, nombre)
     if os.path.exists(ruta):
         df = pd.read_csv(ruta)
-        return limpiar_df(df)
+        df = limpiar_df(df)
+        return df
     return None
 
+def convertir_fecha(df):
+    col_fecha = df.columns[0]
+    df[col_fecha] = df[col_fecha].astype(str)
+
+    if df[col_fecha].str.len().max() == 6:
+        df[col_fecha] = pd.to_datetime(df[col_fecha], format="%Y%m")
+    else:
+        df[col_fecha] = pd.to_datetime(df[col_fecha], errors="coerce")
+
+    return df
+
 def limpiar_df(df):
+    # Convertir valores numéricos
     df[df.columns[1]] = pd.to_numeric(df[df.columns[1]], errors="coerce")
-    return df.dropna()
+    df = df.dropna()
+
+    # ✅ Convertir columna de fechas
+    df = convertir_fecha(df)
+
+    return df
 
 def grafica_lineas_comparativa(df1, df2, titulo, etiqueta1, etiqueta2):
     fig, ax = plt.subplots(figsize=(10,4))
     ax.plot(df1.iloc[:,0], df1.iloc[:,1], marker="o", label=etiqueta1)
-    ax.plot(df2.iloc[:,0], df2.iloc[:,1], marker="o", label=etiqueta2)
+    ax.plot(df2.iloc[:, 0], df2.iloc[:, 1], marker="o", label=etiqueta2)
     ax.set_title(titulo)
     ax.legend()
     ax.grid(True)
@@ -121,10 +139,12 @@ st.header("📱 Fila 3: Ecosistema de Hardware")
 
 col3, col4, col5 = st.columns(3)
 
-if celular is not None:
+if celular is not None and iot is not None:
     with col3:
-        grafica_lineas_comparativa(celular, iot, "Smartphones vs IoT",
-                                   "Smartphones", "IoT")
+        grafica_lineas_comparativa(
+            celular, iot, "Smartphones vs IoT",
+            "Smartphones", "IoT"
+        )
 
 if celular is not None:
     with col4:
