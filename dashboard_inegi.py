@@ -2,165 +2,156 @@ import os
 import sys
 import subprocess
 
-# ======================================================
-# AUTO-LANZADOR STREAMLIT (SIN BUCLES)
-# ======================================================
+# ========================================
+# AUTO LANZADOR STREAMLIT
+# ========================================
 
 def ejecutar_streamlit():
     archivo = os.path.abspath(__file__)
     subprocess.run([sys.executable, "-m", "streamlit", "run", archivo])
 
 if __name__ == "__main__":
-    # Evita que se lance más de una vez
     if os.environ.get("STREAMLIT_ALREADY_RUNNING") != "1":
         os.environ["STREAMLIT_ALREADY_RUNNING"] = "1"
         ejecutar_streamlit()
         sys.exit()
 
-# ======================================================
+# ========================================
 # APP STREAMLIT
-# ======================================================
+# ========================================
 
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 
-# ======================================================
+# ========================================
 # CONFIG
-# ======================================================
+# ========================================
 
-CARPETA_DATOS = "api_inegi"
+st.set_page_config(page_title="INEGI Dashboard", layout="wide")
 
-st.set_page_config(page_title="Dashboard INEGI", layout="wide")
+CARPETA = "api_inegi"
 
-st.title("📊 Dashboard de Indicadores - INEGI")
-st.write("Datos limpios generados automáticamente por recoleccion.py")
+st.title("📊 Dashboard de Transformación Digital en Hogares Mexicanos")
+st.markdown("Análisis visual del impacto del streaming en la economía digital 📡")
 
-# ======================================================
+# ========================================
 # FUNCIONES
-# ======================================================
+# ========================================
 
-def listar_csvs(carpeta):
-    return [f for f in os.listdir(carpeta) if f.endswith(".csv")]
+def cargar_csv(nombre):
+    ruta = os.path.join(CARPETA, nombre)
+    if os.path.exists(ruta):
+        df = pd.read_csv(ruta)
+        return limpiar_df(df)
+    return None
 
-def leer_csv(ruta):
-    return pd.read_csv(ruta)
+def limpiar_df(df):
+    df[df.columns[1]] = pd.to_numeric(df[df.columns[1]], errors="coerce")
+    return df.dropna()
 
-# ======================================================
-# VALIDACIONES
-# ======================================================
+def grafica_lineas_comparativa(df1, df2, titulo, etiqueta1, etiqueta2):
+    fig, ax = plt.subplots(figsize=(10,4))
+    ax.plot(df1.iloc[:,0], df1.iloc[:,1], marker="o", label=etiqueta1)
+    ax.plot(df2.iloc[:,0], df2.iloc[:,1], marker="o", label=etiqueta2)
+    ax.set_title(titulo)
+    ax.legend()
+    ax.grid(True)
+    st.pyplot(fig)
 
-if not os.path.exists(CARPETA_DATOS):
-    st.error("❌ No se encuentra la carpeta api_inegi")
-    st.stop()
+def grafica_barras(df, titulo):
+    fig, ax = plt.subplots(figsize=(9,4))
+    ax.bar(df.iloc[:,0], df.iloc[:,1])
+    ax.set_title(titulo)
+    ax.grid(axis="y")
+    st.pyplot(fig)
 
-archivos = listar_csvs(CARPETA_DATOS)
+def grafica_pastel(valor, titulo):
+    fig, ax = plt.subplots()
+    ax.pie([valor,100-valor], labels=["Participación","Resto"], autopct="%1.1f%%")
+    ax.set_title(titulo)
+    st.pyplot(fig)
 
-if not archivos:
-    st.error("❌ No hay archivos CSV")
-    st.stop()
+# ========================================
+# CARGA DE DATOS
+# ========================================
 
-# ======================================================
-# INTERFAZ
-# ======================================================
+streaming = cargar_csv("Hogares_con_Streaming.csv")
+tv_paga = cargar_csv("Hogares_con_TV_Paga.csv")
+internet = cargar_csv("Hogares_con_Internet.csv")
+iot = cargar_csv("Hogares_con_IoT.csv")
+pagos = cargar_csv("Usuarios_Transacciones_Web.csv")
+celular = cargar_csv("Usuarios_Celular.csv")
 
-archivo_seleccionado = st.selectbox("Selecciona un indicador:", archivos)
+# ========================================
+# FILA 1 - CHOQUE DE MERCADOS
+# ========================================
 
-ruta_archivo = os.path.join(CARPETA_DATOS, archivo_seleccionado)
-df = leer_csv(ruta_archivo)
+st.header("🧩 Fila 1: Choque de Mercados")
 
-st.subheader("📄 Datos")
-st.dataframe(df, use_container_width=True)
+if streaming is not None and tv_paga is not None:
+    grafica_lineas_comparativa(
+        streaming, tv_paga,
+        "Streaming vs TV de Paga",
+        "Streaming Digital",
+        "TV Tradicional"
+    )
 
-# ======================================================
-# GRÁFICOS
-# ======================================================
+# ========================================
+# FILA 2 - CAPACIDAD DE PAGO
+# ========================================
 
-st.subheader("📈 Gráfica")
+st.header("💳 Fila 2: Capacidad de Pago")
 
-col_fecha = df.columns[0]
-col_valor = df.columns[1]
+col1, col2 = st.columns(2)
 
-df[col_valor] = pd.to_numeric(df[col_valor], errors="coerce")
-df = df.dropna()
+if internet is not None:
+    with col1:
+        grafica_barras(internet, "Acceso a Internet")
 
-fig, ax = plt.subplots()
-ax.plot(df[col_fecha], df[col_valor])
-ax.set_xlabel("Fecha")
-ax.set_ylabel(col_valor)
-ax.set_title(archivo_seleccionado.replace(".csv", ""))
+if pagos is not None:
+    with col2:
+        grafica_barras(pagos, "Transacciones en Línea")
 
-st.pyplot(fig)
+# ========================================
+# FILA 3 - ECOSISTEMA DE HARDWARE
+# ========================================
 
+st.header("📱 Fila 3: Ecosistema de Hardware")
 
-import os
-import sys
-import subprocess
+col3, col4, col5 = st.columns(3)
 
-# ======================================================
-# AUTO-LANZADOR STREAMLIT (SIN BUCLES)
-# ======================================================
+if celular is not None:
+    with col3:
+        grafica_lineas_comparativa(celular, iot, "Smartphones vs IoT",
+                                   "Smartphones", "IoT")
 
-def ejecutar_streamlit():
-    archivo = os.path.abspath(__file__)
-    subprocess.run([sys.executable, "-m", "streamlit", "run", archivo])
+if celular is not None:
+    with col4:
+        ultimo = celular.iloc[-1,1]
+        grafica_pastel(ultimo, "Penetración de Smartphones")
 
-if __name__ == "__main__":
-    # Evita que se lance más de una vez
-    if os.environ.get("STREAMLIT_ALREADY_RUNNING") != "1":
-        os.environ["STREAMLIT_ALREADY_RUNNING"] = "1"
-        ejecutar_streamlit()
-        sys.exit()
+if iot is not None:
+    with col5:
+        ultimo_iot = iot.iloc[-1,1]
+        grafica_pastel(ultimo_iot, "Penetración de IoT")
 
-# ======================================================
-# APP STREAMLIT
-# ======================================================
+# ========================================
+# ANÁLISIS INTELIGENTE
+# ========================================
 
-import streamlit as st
-import pandas as pd
+st.header("🧠 Interpretación Automática")
 
-# ======================================================
-# FUNCIONES
-# ======================================================
-
-def listar_csvs(carpeta):
-    return [f for f in os.listdir(carpeta) if f.endswith(".csv")]
-
-def leer_csv(ruta):
-    return pd.read_csv(ruta)
-
-
-# ======================================================
-# 🧠 ANÁLISIS GENERAL DE LA GRÁFICA (SECCIÓN NUEVA)
-# ======================================================
-
-st.subheader("📌 Análisis General del Indicador")
-
-if len(df) > 1:
-    valor_inicial = df[col_valor].iloc[0]
-    valor_final = df[col_valor].iloc[-1]
-    maximo = df[col_valor].max()
-    minimo = df[col_valor].min()
-    promedio = df[col_valor].mean()
-
-    tendencia = "estable"
-    if valor_final > valor_inicial:
-        tendencia = "alcista (tendencia al alza)"
-    elif valor_final < valor_inicial:
-        tendencia = "bajista (tendencia a la baja)"
+if streaming is not None:
+    ini = streaming.iloc[0,1]
+    fin = streaming.iloc[-1,1]
+    crecimiento = fin - ini
 
     st.markdown(f"""
-    📝 **Resumen del comportamiento del indicador:**
+    - Valor inicial Streaming: **{ini}**
+    - Valor final Streaming: **{fin}**
+    - Crecimiento total: **{crecimiento} puntos**
 
-    - Valor inicial: **{valor_inicial:,.2f}**
-    - Valor final: **{valor_final:,.2f}**
-    - Valor máximo: **{maximo:,.2f}**
-    - Valor mínimo: **{minimo:,.2f}**
-    - Promedio general: **{promedio:,.2f}**
-    - Tendencia general: **{tendencia}**
-
-    💡 *Interpretación:*  
-    El indicador muestra una tendencia **{tendencia}** a lo largo del periodo analizado, con fluctuaciones entre **{minimo:,.2f}** y **{maximo:,.2f}**, lo que sugiere un comportamiento relativamente {"estable" if tendencia == "estable" else "variable"} en el tiempo.
+    El crecimiento de las plataformas digitales muestra una transformación clara
+    en la economía de los hogares mexicanos.
     """)
-else:
-    st.info("ℹ️ No hay suficientes datos para generar el análisis.")
