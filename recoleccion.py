@@ -1,6 +1,7 @@
 import requests
 import pandas as pd
 import os
+import pydoc
 import urllib
 from sqlalchemy import create_engine
 
@@ -18,7 +19,7 @@ INDICATOR_ID_LISTA = "8999998853,6206972696,6206972691,6206972692,8999998854,620
 GEOGRAFIA = "00"  # 00 = Nacional
 PARAMETRO_TIEMPO = "false"  # false = todos los periodos disponibles
 
-# Mapeo de IDs a Nombres Legibles (Para que la BD tenga nombres claros)
+# Mapeo de IDs a Nombres Legibles
 NOMBRES_INDICADORES = {
     "6206972696": "Hogares_con_Streaming",
     "6206972691": "Hogares_con_TV_Paga",
@@ -35,35 +36,51 @@ URL_BASE = (
     f"{GEOGRAFIA}/{PARAMETRO_TIEMPO}/BISE/2.0/{API_TOKEN}?type=json"
 )
 
-# =======================================================================
-# 2. CONFIGURACIÓN DE BASE DE DATOS (SQL SERVER)
-# =======================================================================
-
-# Nombre exacto de tu servidor (La 'r' al inicio es vital para evitar errores con '\')
 SERVER_NAME = r'GABRIEL_PC\SQLEXPRESS'
 DATABASE_NAME = 'inegi_db'
 
-# Configuración de la cadena de conexión para Autenticación de Windows
-params = urllib.parse.quote_plus(
-    f"DRIVER={{ODBC Driver 17 for SQL Server}};"
-    f"SERVER={SERVER_NAME};"
-    f"DATABASE={DATABASE_NAME};"
-    f"Trusted_Connection=yes;"
-)
 
-CONNECTION_STRING = f"mssql+pyodbc:///?odbc_connect={params}"
+# =======================================================================
+# 2. CLASE PARA GESTIÓN DE BASE DE DATOS (CUMPLE REQUISITO QUINTO)
+# =======================================================================
 
-# Intentamos crear el motor de conexión
-db_engine = None
-try:
-    db_engine = create_engine(CONNECTION_STRING)
-    # Prueba rápida de conexión
-    with db_engine.connect() as conn:
-        print(f"[SQL] Conexión exitosa a: {SERVER_NAME} -> {DATABASE_NAME}")
-except Exception as e:
-    print(f"\n[ERROR CRÍTICO] No se pudo conectar a SQL Server.")
-    print(f"Detalle del error: {e}")
-    print("Asegúrate de tener instalado el 'ODBC Driver 17 for SQL Server'.")
+class ManejadorSQL:
+    def __init__(self, server, database):
+        self.server = server
+        self.database = database
+        self.engine = None
+        self._crear_conexion()
+
+    def _crear_conexion(self):
+        """Configura la conexión usando autenticación de Windows."""
+        params = urllib.parse.quote_plus(
+            f"DRIVER={{ODBC Driver 17 for SQL Server}};"
+            f"SERVER={self.server};"
+            f"DATABASE={self.database};"
+            f"Trusted_Connection=yes;"
+        )
+        connection_string = f"mssql+pyodbc:///?odbc_connect={params}"
+
+        try:
+            self.engine = create_engine(connection_string)
+            # Prueba rápida de conexión
+            with self.engine.connect() as conn:
+                print(f"[SQL] Conexión exitosa a: {self.server} -> {self.database}")
+        except Exception as e:
+            print(f"\n[ERROR CRÍTICO] No se pudo conectar a SQL Server.")
+            print(f"Detalle del error: {e}")
+            self.engine = None
+
+    def guardar_tabla(self, df, nombre_tabla):
+        """Guarda un DataFrame en la base de datos."""
+        if self.engine is None:
+            return "Sin conexión a BD"
+
+        try:
+            df.to_sql(name=nombre_tabla, con=self.engine, if_exists='replace', index=False)
+            return "Cargado en SQL Server OK"
+        except Exception as e:
+            return f"Error SQL: {e}"
 
 
 # =======================================================================
@@ -71,15 +88,7 @@ except Exception as e:
 # =======================================================================
 
 def obtener_datos_inegi(url):
-    """
-    Realiza la petición GET a la API del INEGI.
-
-    Args:
-        url (str): URL formateada con token e indicadores.
-
-    Returns:
-        dict: Objeto JSON con la respuesta si es exitosa, None si falla.
-    """
+    """Realiza la petición GET a la API del INEGI."""
     try:
         print(f"Conectando a API INEGI...")
         response = requests.get(url)
@@ -93,15 +102,9 @@ def obtener_datos_inegi(url):
         return None
 
 
-def procesar_y_guardar_series(datos_json, carpeta_salida, nombres_map, engine):
+def procesar_y_guardar_series(datos_json, carpeta_salida, nombres_map, db_class_instance):
     """
-    Procesa el JSON, limpia los datos, genera CSVs y carga a SQL Server.
-
-    Args:
-        datos_json (dict): JSON crudo del INEGI.
-        carpeta_salida (str): Ruta donde se guardarán los CSV.
-        nombres_map (dict): Diccionario para renombrar IDs a texto legible.
-        engine (sqlalchemy.engine): Motor de conexión a SQL Server.
+    Procesa el JSON, limpia los datos, genera CSVs y usa la CLASE para guardar en SQL.
     """
     if 'Series' not in datos_json:
         print("[Error] El JSON no contiene la clave 'Series'.")
@@ -142,12 +145,8 @@ def procesar_y_guardar_series(datos_json, carpeta_salida, nombres_map, engine):
             path_csv = os.path.join(carpeta_salida, f'{nombre_amigable}.csv')
             df.to_csv(path_csv, index=False)
 
-            # --- GUARDAR EN SQL SERVER ---
-            try:
-                df.to_sql(name=nombre_amigable, con=engine, if_exists='replace', index=False)
-                msg_sql = "Cargado en SQL Server OK"
-            except Exception as e:
-                msg_sql = f"Error SQL: {e}"
+            # --- GUARDAR EN SQL SERVER USANDO LA CLASE ---
+            msg_sql = db_class_instance.guardar_tabla(df, nombre_amigable)
 
             print(f"-> {nombre_amigable}: {len(df)} regs. | {msg_sql}")
 
@@ -157,10 +156,12 @@ def procesar_y_guardar_series(datos_json, carpeta_salida, nombres_map, engine):
 # =======================================================================
 
 if __name__ == "__main__":
+
+    db_manager = ManejadorSQL(SERVER_NAME, DATABASE_NAME)
+
     # Verificación de seguridad antes de empezar
-    if db_engine is None:
+    if db_manager.engine is None:
         print("\n[ALERTA] Deteniendo el programa porque no hay conexión a la Base de Datos.")
-        print("Revisa la configuración de SERVER_NAME o instala el driver ODBC.")
         exit()
 
     CARPETA_SALIDA = 'api_inegi'
@@ -170,7 +171,8 @@ if __name__ == "__main__":
     datos = obtener_datos_inegi(URL_BASE)
 
     if datos:
-        procesar_y_guardar_series(datos, CARPETA_SALIDA, NOMBRES_INDICADORES, db_engine)
+        # Pasamos la instancia de la clase 'db_manager' en lugar del engine crudo
+        procesar_y_guardar_series(datos, CARPETA_SALIDA, NOMBRES_INDICADORES, db_manager)
         print("\n[LISTO] Proceso finalizado correctamente.")
     else:
         print("\n[FALLO] No se pudo completar el proceso.")
